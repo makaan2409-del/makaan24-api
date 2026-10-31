@@ -16,15 +16,21 @@ properties_collection = db["properties"]
 async def search_properties(request: Request):
     try:
         payload = await request.json()
-        args = payload.get("args", {}) or payload.get("parameters", {}) or payload.get("call", {}).get("args", {})
+        
+        args = (
+            payload.get("args") or 
+            payload.get("parameters") or 
+            payload.get("call", {}).get("args") or 
+            payload
+        )
 
-        city = args.get("city")
-        max_price = args.get("max_price")
-        bhk = args.get("bhk")
+        city = args.get("city") or args.get("location")
+        max_price = args.get("max_price") or args.get("budget")
+        bhk = args.get("bhk") or args.get("bedrooms")
 
         query = {"isTrashed": {"$ne": True}}
 
-        # Match city/location
+        # 1. Location Filter
         if city and str(city).strip():
             city_str = str(city).strip()
             query["$or"] = [
@@ -34,15 +40,15 @@ async def search_properties(request: Request):
                 {"title": {"$regex": city_str, "$options": "i"}}
             ]
 
-        # Match bedrooms (BHK)
-        if bhk:
+        # 2. BHK Filter (Handle both string "2" and int 2)
+        if bhk is not None:
             try:
                 query["bedrooms"] = int(bhk)
             except (ValueError, TypeError):
                 pass
 
-        # Match Price Budget
-        if max_price:
+        # 3. Budget Filter (Handle both string "20000000" and float/int)
+        if max_price is not None:
             try:
                 price_val = float(max_price)
                 if price_val > 1000000:
@@ -52,22 +58,10 @@ async def search_properties(request: Request):
             except (ValueError, TypeError):
                 pass
 
-        # Search MongoDB database
+        # Search MongoDB
         results = list(properties_collection.find(query).sort("createdAt", -1).limit(5))
 
-        # Only search by location if exact BHK filter gave empty result
-        if not results and city:
-            location_only_query = {
-                "isTrashed": {"$ne": True},
-                "$or": [
-                    {"cityText": {"$regex": str(city), "$options": "i"}},
-                    {"areaText": {"$regex": str(city), "$options": "i"}},
-                    {"address": {"$regex": str(city), "$options": "i"}}
-                ]
-            }
-            results = list(properties_collection.find(location_only_query).sort("createdAt", -1).limit(3))
-
-        # Safely convert BSON to JSON
+        # Safe BSON to JSON Conversion
         cleaned_results = json.loads(json_util.dumps(results))
 
         return JSONResponse(status_code=200, content={"properties": cleaned_results})

@@ -24,8 +24,8 @@ async def search_properties(request: Request):
 
         query = {"isTrashed": {"$ne": True}}
 
-        # Match cityText, areaText, title, or address
-        if city:
+        # Match city/location
+        if city and str(city).strip():
             city_str = str(city).strip()
             query["$or"] = [
                 {"cityText": {"$regex": city_str, "$options": "i"}},
@@ -34,7 +34,7 @@ async def search_properties(request: Request):
                 {"title": {"$regex": city_str, "$options": "i"}}
             ]
 
-        # Match exact bedrooms (BHK)
+        # Match bedrooms (BHK)
         if bhk:
             try:
                 query["bedrooms"] = int(bhk)
@@ -45,7 +45,6 @@ async def search_properties(request: Request):
         if max_price:
             try:
                 price_val = float(max_price)
-                # Avoid returning monthly rent properties when user asks for buying budget (> 10 Lakhs)
                 if price_val > 1000000:
                     query["price"] = {"$gte": 500000, "$lte": price_val}
                 else:
@@ -53,12 +52,13 @@ async def search_properties(request: Request):
             except (ValueError, TypeError):
                 pass
 
-        # Search MongoDB database across ALL matching listings
+        # Search MongoDB database
         results = list(properties_collection.find(query).sort("createdAt", -1).limit(5))
 
-        # Secondary Fallback: Try searching only by location if exact BHK+Price match was empty
+        # Only search by location if exact BHK filter gave empty result
         if not results and city:
             location_only_query = {
+                "isTrashed": {"$ne": True},
                 "$or": [
                     {"cityText": {"$regex": str(city), "$options": "i"}},
                     {"areaText": {"$regex": str(city), "$options": "i"}},
@@ -67,7 +67,7 @@ async def search_properties(request: Request):
             }
             results = list(properties_collection.find(location_only_query).sort("createdAt", -1).limit(3))
 
-        # Safely convert BSON (ObjectIds, Dates) into standard JSON format
+        # Safely convert BSON to JSON
         cleaned_results = json.loads(json_util.dumps(results))
 
         return JSONResponse(status_code=200, content={"properties": cleaned_results})

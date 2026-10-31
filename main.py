@@ -22,37 +22,50 @@ async def search_properties(request: Request):
         max_price = args.get("max_price")
         bhk = args.get("bhk")
 
-        query = {}
+        query = {"isTrashed": {"$ne": True}}
 
-        # Search cityText, areaText, or address
+        # Match cityText, areaText, title, or address
         if city:
+            city_str = str(city).strip()
             query["$or"] = [
-                {"cityText": {"$regex": str(city), "$options": "i"}},
-                {"areaText": {"$regex": str(city), "$options": "i"}},
-                {"address": {"$regex": str(city), "$options": "i"}},
-                {"title": {"$regex": str(city), "$options": "i"}}
+                {"cityText": {"$regex": city_str, "$options": "i"}},
+                {"areaText": {"$regex": city_str, "$options": "i"}},
+                {"address": {"$regex": city_str, "$options": "i"}},
+                {"title": {"$regex": city_str, "$options": "i"}}
             ]
 
-        # Search bedrooms (BHK)
+        # Match exact bedrooms (BHK)
         if bhk:
             try:
                 query["bedrooms"] = int(bhk)
             except (ValueError, TypeError):
                 pass
 
-        # Search budget price
+        # Match Price Budget
         if max_price:
             try:
-                query["price"] = {"$lte": float(max_price)}
+                price_val = float(max_price)
+                # Avoid returning monthly rent properties when user asks for buying budget (> 10 Lakhs)
+                if price_val > 1000000:
+                    query["price"] = {"$gte": 500000, "$lte": price_val}
+                else:
+                    query["price"] = {"$lte": price_val}
             except (ValueError, TypeError):
                 pass
 
-        # Fetch matching records
-        results = list(properties_collection.find(query).limit(3))
+        # Search MongoDB database across ALL matching listings
+        results = list(properties_collection.find(query).sort("createdAt", -1).limit(5))
 
-        # Fallback: If no match, return latest 3 properties
-        if not results:
-            results = list(properties_collection.find({}).limit(3))
+        # Secondary Fallback: Try searching only by location if exact BHK+Price match was empty
+        if not results and city:
+            location_only_query = {
+                "$or": [
+                    {"cityText": {"$regex": str(city), "$options": "i"}},
+                    {"areaText": {"$regex": str(city), "$options": "i"}},
+                    {"address": {"$regex": str(city), "$options": "i"}}
+                ]
+            }
+            results = list(properties_collection.find(location_only_query).sort("createdAt", -1).limit(3))
 
         # Safely convert BSON (ObjectIds, Dates) into standard JSON format
         cleaned_results = json.loads(json_util.dumps(results))
@@ -60,5 +73,4 @@ async def search_properties(request: Request):
         return JSONResponse(status_code=200, content={"properties": cleaned_results})
 
     except Exception as e:
-        # Prevent 500 crashes and return readable error message
         return JSONResponse(status_code=200, content={"properties": [], "error": str(e)})

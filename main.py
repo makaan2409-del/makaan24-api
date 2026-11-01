@@ -14,6 +14,7 @@ db = client["makaan_latest_db"]
 properties_collection = db["properties"]
 leads_collection = db["caller_leads"]
 
+# India Standard Time (IST) offset (+5:30)
 IST = timezone(timedelta(hours=5, minutes=30))
 
 @app.post("/search-properties")
@@ -104,6 +105,9 @@ async def search_properties(request: Request):
         return JSONResponse(status_code=200, content={"properties": [], "error": str(e)})
 
 
+# ==========================================
+# ENDPOINT: Complete Lead Details Saving (Upsert)
+# ==========================================
 @app.post("/save-lead")
 async def save_lead(request: Request):
     try:
@@ -124,21 +128,24 @@ async def save_lead(request: Request):
             lead_data = {
                 "name": caller_name,
                 "phone": caller_phone,
-                "city_interest": args.get("city"),
-                "bhk_interest": args.get("bhk"),
-                "created_at": datetime.now(IST)
+                "city_interest": args.get("city") or args.get("location"),
+                "bhk_interest": args.get("bhk") or args.get("bedrooms"),
+                "budget": args.get("budget") or args.get("max_price"),
+                "purpose": args.get("purpose") or args.get("intent"),
+                "updated_at": datetime.now(IST)
             }
             
             if caller_phone:
                 leads_collection.update_one(
                     {"phone": caller_phone},
-                    {"$set": lead_data},
+                    {"$set": lead_data, "$setOnInsert": {"created_at": datetime.now(IST)}},
                     upsert=True
                 )
             else:
+                lead_data["created_at"] = datetime.now(IST)
                 leads_collection.insert_one(lead_data)
                 
-            return JSONResponse(status_code=200, content={"status": "success", "message": "Lead saved successfully!"})
+            return JSONResponse(status_code=200, content={"status": "success", "message": "Complete lead details saved successfully!"})
         
         return JSONResponse(status_code=200, content={"status": "failed", "message": "No caller info provided."})
         

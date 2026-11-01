@@ -33,24 +33,26 @@ async def search_properties(request: Request):
         max_price = args.get("max_price") or args.get("budget")
         bhk = args.get("bhk") or args.get("bedrooms")
         purpose = args.get("purpose") or args.get("listing_type") or args.get("intent")
-        prop_type = args.get("property_type") or args.get("type") # Builder Floor / Flat / Plot
+        prop_type = args.get("property_type") or args.get("type")
 
         query = {
             "isTrashed": {"$ne": True},
             "status": "published"
         }
 
-        # 1. Location Filter
+        # 1. Broad Title & Location Matcher (Matches "Sector 21", "Rohini", "Pitampura", etc. inside title)
         if raw_city and str(raw_city).strip():
             city_clean = str(raw_city).split(',')[0].strip()
             query["$or"] = [
-                {"areaText": {"$regex": city_clean, "$options": "i"}},
+                {"title": {"$regex": city_clean, "$options": "i"}},
+                {"slug": {"$regex": city_clean, "$options": "i"}},
                 {"address": {"$regex": city_clean, "$options": "i"}},
+                {"areaText": {"$regex": city_clean, "$options": "i"}},
                 {"cityText": {"$regex": city_clean, "$options": "i"}},
-                {"title": {"$regex": city_clean, "$options": "i"}}
+                {"stateText": {"$regex": city_clean, "$options": "i"}}
             ]
 
-        # 2. BHK Filter
+        # 2. BHK Filter (Skipped if not provided or for land/plots)
         if bhk is not None:
             try:
                 bhk_num = int(bhk)
@@ -72,14 +74,27 @@ async def search_properties(request: Request):
             elif "sale" in p_str or "buy" in p_str or "kharid" in p_str:
                 query["statusType"] = "for-sale"
 
-        # 4. Property Type Filter (Floor / Flat / Plot)
+        # 4. Property Type Filter (Title & Category Matching)
         if prop_type and str(prop_type).strip():
-            type_str = str(prop_type).strip()
-            query["$or"] = query.get("$or", [])
-            query["$or"].extend([
-                {"title": {"$regex": type_str, "$options": "i"}},
-                {"slug": {"$regex": type_str, "$options": "i"}}
-            ])
+            type_str = str(prop_type).strip().lower()
+            query["$and"] = query.get("$and", [])
+            
+            if "plot" in type_str or "land" in type_str or "zameen" in type_str:
+                query["$and"].append({
+                    "$or": [
+                        {"title": {"$regex": "plot|land|bigha|villa|house", "$options": "i"}},
+                        {"slug": {"$regex": "plot|land|bigha|villa|house", "$options": "i"}},
+                        {"landArea": {"$ne": None}}
+                    ]
+                })
+            else:
+                query["$and"].append({
+                    "$or": [
+                        {"title": {"$regex": type_str, "$options": "i"}},
+                        {"slug": {"$regex": type_str, "$options": "i"}},
+                        {"propertyType": {"$regex": type_str, "$options": "i"}}
+                    ]
+                })
 
         # 5. Budget Filter
         if max_price is not None:
@@ -89,7 +104,7 @@ async def search_properties(request: Request):
             except (ValueError, TypeError):
                 pass
 
-        # Projection to remove heavy HTML fields
+        # Projection to remove heavy HTML fields to keep LLM response quick
         projection = {
             "content": 0,
             "seo": 0,
@@ -105,9 +120,6 @@ async def search_properties(request: Request):
         return JSONResponse(status_code=200, content={"properties": [], "error": str(e)})
 
 
-# ==========================================
-# ENDPOINT: Complete Lead Details Saving (Upsert)
-# ==========================================
 @app.post("/save-lead")
 async def save_lead(request: Request):
     try:
@@ -132,6 +144,7 @@ async def save_lead(request: Request):
                 "bhk_interest": args.get("bhk") or args.get("bedrooms"),
                 "budget": args.get("budget") or args.get("max_price"),
                 "purpose": args.get("purpose") or args.get("intent"),
+                "property_type": args.get("property_type") or args.get("type"),
                 "updated_at": datetime.now(IST)
             }
             

@@ -14,7 +14,6 @@ db = client["makaan_latest_db"]
 properties_collection = db["properties"]
 leads_collection = db["caller_leads"]
 
-# India Standard Time (IST) offset (+5:30)
 IST = timezone(timedelta(hours=5, minutes=30))
 
 @app.post("/search-properties")
@@ -33,17 +32,16 @@ async def search_properties(request: Request):
         max_price = args.get("max_price") or args.get("budget")
         bhk = args.get("bhk") or args.get("bedrooms")
         purpose = args.get("purpose") or args.get("listing_type") or args.get("intent")
+        prop_type = args.get("property_type") or args.get("type") # Builder Floor / Flat / Plot
 
         query = {
             "isTrashed": {"$ne": True},
             "status": "published"
         }
 
-        # Clean Location Text (Splits Comma and supports English & Hindi strings)
+        # 1. Location Filter
         if raw_city and str(raw_city).strip():
-            city_full = str(raw_city).strip()
-            city_clean = city_full.split(',')[0].strip()
-            
+            city_clean = str(raw_city).split(',')[0].strip()
             query["$or"] = [
                 {"areaText": {"$regex": city_clean, "$options": "i"}},
                 {"address": {"$regex": city_clean, "$options": "i"}},
@@ -51,7 +49,7 @@ async def search_properties(request: Request):
                 {"title": {"$regex": city_clean, "$options": "i"}}
             ]
 
-        # Handle BHK (Int & String Match)
+        # 2. BHK Filter
         if bhk is not None:
             try:
                 bhk_num = int(bhk)
@@ -65,7 +63,7 @@ async def search_properties(request: Request):
             except (ValueError, TypeError):
                 pass
 
-        # Handle Purpose (Sale vs Rent)
+        # 3. Purpose Filter (Sale vs Rent)
         if purpose and str(purpose).strip():
             p_str = str(purpose).lower()
             if "rent" in p_str:
@@ -73,7 +71,16 @@ async def search_properties(request: Request):
             elif "sale" in p_str or "buy" in p_str or "kharid" in p_str:
                 query["statusType"] = "for-sale"
 
-        # Handle Budget Price
+        # 4. Property Type Filter (Floor / Flat / Plot)
+        if prop_type and str(prop_type).strip():
+            type_str = str(prop_type).strip()
+            query["$or"] = query.get("$or", [])
+            query["$or"].extend([
+                {"title": {"$regex": type_str, "$options": "i"}},
+                {"slug": {"$regex": type_str, "$options": "i"}}
+            ])
+
+        # 5. Budget Filter
         if max_price is not None:
             try:
                 price_val = float(max_price)
@@ -81,7 +88,7 @@ async def search_properties(request: Request):
             except (ValueError, TypeError):
                 pass
 
-        # Exclude massive HTML content fields to keep LLM response fast & light
+        # Projection to remove heavy HTML fields
         projection = {
             "content": 0,
             "seo": 0,

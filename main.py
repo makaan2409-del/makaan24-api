@@ -4,7 +4,7 @@ from pymongo import MongoClient
 from bson import json_util
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 app = FastAPI()
 
@@ -12,6 +12,10 @@ MONGO_URI = os.getenv("MONGO_URI")
 client = MongoClient(MONGO_URI)
 db = client["makaan_latest_db"]
 properties_collection = db["properties"]
+leads_collection = db["caller_leads"]  # Leads collection
+
+# India Standard Time (IST) offset (+5:30)
+IST = timezone(timedelta(hours=5, minutes=30))
 
 @app.post("/search-properties")
 async def search_properties(request: Request):
@@ -71,10 +75,8 @@ async def search_properties(request: Request):
         return JSONResponse(status_code=200, content={"properties": [], "error": str(e)})
 
 # ==========================================
-# NEW ENDPOINT: Caller Leads Save Karne Ke Liye
+# ENDPOINT: Caller Leads Save / Update (Upsert)
 # ==========================================
-leads_collection = db["caller_leads"]  # Mongo database mein naya collection banega
-
 @app.post("/save-lead")
 async def save_lead(request: Request):
     try:
@@ -89,7 +91,7 @@ async def save_lead(request: Request):
         
         # Retell Call Object se auto-caller number fetch karein
         call_obj = payload.get("call", {})
-        caller_phone = call_obj.get("from_number") or args.get("phone_number")
+        caller_phone = call_obj.get("from_number") or args.get("phone_number") or args.get("phone")
         caller_name = args.get("name") or "Unknown Customer"
 
         if caller_phone or caller_name:
@@ -98,9 +100,19 @@ async def save_lead(request: Request):
                 "phone": caller_phone,
                 "city_interest": args.get("city"),
                 "bhk_interest": args.get("bhk"),
-                "created_at": datetime.utcnow()
+                "created_at": datetime.now(IST)  # IST Time save hoga
             }
-            leads_collection.insert_one(lead_data)
+            
+            # Upsert logic: Agar phone number pehle se hai, toh naya row banane ke bajaye usi ko update karega
+            if caller_phone:
+                leads_collection.update_one(
+                    {"phone": caller_phone},
+                    {"$set": lead_data},
+                    upsert=True
+                )
+            else:
+                leads_collection.insert_one(lead_data)
+                
             return JSONResponse(status_code=200, content={"status": "success", "message": "Lead saved successfully!"})
         
         return JSONResponse(status_code=200, content={"status": "failed", "message": "No caller info provided."})

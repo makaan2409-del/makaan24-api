@@ -34,13 +34,13 @@ async def search_properties(request: Request):
         bhk = args.get("bhk") or args.get("bedrooms")
         purpose = args.get("purpose") or args.get("listing_type") or args.get("intent") # Sale / Rent
 
-        # Strict baseline filters according to your MongoDB schema
+        # Baseline mandatory filters matching your database schema
         query = {
             "isTrashed": {"$ne": True},
             "status": "published"
         }
 
-        # 1. Location Filter (Split "Pitampura, Delhi" -> search "Pitampura")
+        # 1. Location Filter (Clean "Pitampura, Delhi" -> search "Pitampura")
         if raw_city and str(raw_city).strip():
             city_full = str(raw_city).strip()
             city_clean = city_full.split(',')[0].strip()
@@ -52,10 +52,17 @@ async def search_properties(request: Request):
                 {"title": {"$regex": city_clean, "$options": "i"}}
             ]
 
-        # 2. BHK Filter
+        # 2. BHK Filter (Handle both Int 2 and String "2")
         if bhk is not None:
             try:
-                query["bedrooms"] = int(bhk)
+                bhk_num = int(bhk)
+                query["$and"] = query.get("$and", [])
+                query["$and"].append({
+                    "$or": [
+                        {"bedrooms": bhk_num},
+                        {"bedrooms": str(bhk_num)}
+                    ]
+                })
             except (ValueError, TypeError):
                 pass
 
@@ -75,10 +82,10 @@ async def search_properties(request: Request):
             except (ValueError, TypeError):
                 pass
 
-        # Fetch matching properties
-        results = list(properties_collection.find(query).sort("createdAt", -1).limit(5))
+        # Fetch matching properties (increased limit to 25)
+        results = list(properties_collection.find(query).sort("createdAt", -1).limit(25))
 
-        # BSON to JSON Conversion
+        # Safe BSON to JSON Conversion
         cleaned_results = json.loads(json_util.dumps(results))
 
         return JSONResponse(status_code=200, content={"properties": cleaned_results})

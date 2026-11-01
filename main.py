@@ -14,7 +14,6 @@ db = client["makaan_latest_db"]
 properties_collection = db["properties"]
 leads_collection = db["caller_leads"]
 
-# India Standard Time (IST) offset (+5:30)
 IST = timezone(timedelta(hours=5, minutes=30))
 
 @app.post("/search-properties")
@@ -32,15 +31,14 @@ async def search_properties(request: Request):
         raw_city = args.get("city") or args.get("location") or ""
         max_price = args.get("max_price") or args.get("budget")
         bhk = args.get("bhk") or args.get("bedrooms")
-        purpose = args.get("purpose") or args.get("listing_type") or args.get("intent") # Sale / Rent
+        purpose = args.get("purpose") or args.get("listing_type") or args.get("intent")
 
-        # Baseline mandatory filters matching your database schema
         query = {
             "isTrashed": {"$ne": True},
             "status": "published"
         }
 
-        # 1. Location Filter (Clean "Pitampura, Delhi" -> search "Pitampura")
+        # Clean Location Text (Splits Comma and supports English & Hindi strings)
         if raw_city and str(raw_city).strip():
             city_full = str(raw_city).strip()
             city_clean = city_full.split(',')[0].strip()
@@ -52,7 +50,7 @@ async def search_properties(request: Request):
                 {"title": {"$regex": city_clean, "$options": "i"}}
             ]
 
-        # 2. BHK Filter (Handle both Int 2 and String "2")
+        # Handle BHK (Int & String Match)
         if bhk is not None:
             try:
                 bhk_num = int(bhk)
@@ -66,7 +64,7 @@ async def search_properties(request: Request):
             except (ValueError, TypeError):
                 pass
 
-        # 3. Purpose Filter (Exact MongoDB statusType: "for-sale" / "for-rent")
+        # Handle Purpose (Sale vs Rent)
         if purpose and str(purpose).strip():
             p_str = str(purpose).lower()
             if "rent" in p_str:
@@ -74,7 +72,7 @@ async def search_properties(request: Request):
             elif "sale" in p_str or "buy" in p_str or "kharid" in p_str:
                 query["statusType"] = "for-sale"
 
-        # 4. Budget Filter
+        # Handle Budget Price
         if max_price is not None:
             try:
                 price_val = float(max_price)
@@ -82,10 +80,7 @@ async def search_properties(request: Request):
             except (ValueError, TypeError):
                 pass
 
-        # Fetch matching properties (increased limit to 25)
         results = list(properties_collection.find(query).sort("createdAt", -1).limit(25))
-
-        # Safe BSON to JSON Conversion
         cleaned_results = json.loads(json_util.dumps(results))
 
         return JSONResponse(status_code=200, content={"properties": cleaned_results})
@@ -94,9 +89,6 @@ async def search_properties(request: Request):
         return JSONResponse(status_code=200, content={"properties": [], "error": str(e)})
 
 
-# ==========================================
-# ENDPOINT: Save / Update Leads (Upsert)
-# ==========================================
 @app.post("/save-lead")
 async def save_lead(request: Request):
     try:

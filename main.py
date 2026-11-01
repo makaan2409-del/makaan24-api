@@ -68,3 +68,41 @@ async def search_properties(request: Request):
 
     except Exception as e:
         return JSONResponse(status_code=200, content={"properties": [], "error": str(e)})
+
+# ==========================================
+# NEW ENDPOINT: Caller Leads Save Karne Ke Liye
+# ==========================================
+leads_collection = db["caller_leads"]  # Mongo database mein naya collection banega
+
+@app.post("/save-lead")
+async def save_lead(request: Request):
+    try:
+        payload = await request.json()
+        
+        args = (
+            payload.get("args") or 
+            payload.get("parameters") or 
+            payload.get("call", {}).get("args") or 
+            payload
+        )
+        
+        # Retell Call Object se auto-caller number fetch karein
+        call_obj = payload.get("call", {})
+        caller_phone = call_obj.get("from_number") or args.get("phone_number")
+        caller_name = args.get("name") or "Unknown Customer"
+
+        if caller_phone or caller_name:
+            lead_data = {
+                "name": caller_name,
+                "phone": caller_phone,
+                "city_interest": args.get("city"),
+                "bhk_interest": args.get("bhk"),
+                "created_at": datetime.utcnow()
+            }
+            leads_collection.insert_one(lead_data)
+            return JSONResponse(status_code=200, content={"status": "success", "message": "Lead saved successfully!"})
+        
+        return JSONResponse(status_code=200, content={"status": "failed", "message": "No caller info provided."})
+        
+    except Exception as e:
+        return JSONResponse(status_code=200, content={"status": "error", "message": str(e)})

@@ -14,6 +14,7 @@ db = client["makaan_latest_db"]
 properties_collection = db["properties"]
 leads_collection = db["caller_leads"]
 
+# India Standard Time (IST) offset (+5:30)
 IST = timezone(timedelta(hours=5, minutes=30))
 
 @app.post("/search-properties")
@@ -80,7 +81,14 @@ async def search_properties(request: Request):
             except (ValueError, TypeError):
                 pass
 
-        results = list(properties_collection.find(query).sort("createdAt", -1).limit(25))
+        # Exclude massive HTML content fields to keep LLM response fast & light
+        projection = {
+            "content": 0,
+            "seo": 0,
+            "mediaGalleryAlt": 0
+        }
+
+        results = list(properties_collection.find(query, projection).sort("createdAt", -1).limit(20))
         cleaned_results = json.loads(json_util.dumps(results))
 
         return JSONResponse(status_code=200, content={"properties": cleaned_results})

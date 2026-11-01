@@ -12,7 +12,7 @@ MONGO_URI = os.getenv("MONGO_URI")
 client = MongoClient(MONGO_URI)
 db = client["makaan_latest_db"]
 properties_collection = db["properties"]
-leads_collection = db["caller_leads"]  # Leads collection
+leads_collection = db["caller_leads"]
 
 # India Standard Time (IST) offset (+5:30)
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -29,44 +29,56 @@ async def search_properties(request: Request):
             payload
         )
 
-        city = args.get("city") or args.get("location")
+        raw_city = args.get("city") or args.get("location") or ""
         max_price = args.get("max_price") or args.get("budget")
         bhk = args.get("bhk") or args.get("bedrooms")
+        purpose = args.get("purpose") or args.get("listing_type") or args.get("intent") # Sale / Rent
 
-        query = {"isTrashed": {"$ne": True}}
+        # Strict baseline filters according to your MongoDB schema
+        query = {
+            "isTrashed": {"$ne": True},
+            "status": "published"
+        }
 
-        # 1. Location Filter
-        if city and str(city).strip():
-            city_str = str(city).strip()
+        # 1. Location Filter (Split "Pitampura, Delhi" -> search "Pitampura")
+        if raw_city and str(raw_city).strip():
+            city_full = str(raw_city).strip()
+            city_clean = city_full.split(',')[0].strip()
+            
             query["$or"] = [
-                {"cityText": {"$regex": city_str, "$options": "i"}},
-                {"areaText": {"$regex": city_str, "$options": "i"}},
-                {"address": {"$regex": city_str, "$options": "i"}},
-                {"title": {"$regex": city_str, "$options": "i"}}
+                {"areaText": {"$regex": city_clean, "$options": "i"}},
+                {"address": {"$regex": city_clean, "$options": "i"}},
+                {"cityText": {"$regex": city_clean, "$options": "i"}},
+                {"title": {"$regex": city_clean, "$options": "i"}}
             ]
 
-        # 2. BHK Filter (Handle both string "2" and int 2)
+        # 2. BHK Filter
         if bhk is not None:
             try:
                 query["bedrooms"] = int(bhk)
             except (ValueError, TypeError):
                 pass
 
-        # 3. Budget Filter (Handle both string "20000000" and float/int)
+        # 3. Purpose Filter (Exact MongoDB statusType: "for-sale" / "for-rent")
+        if purpose and str(purpose).strip():
+            p_str = str(purpose).lower()
+            if "rent" in p_str:
+                query["statusType"] = "for-rent"
+            elif "sale" in p_str or "buy" in p_str or "kharid" in p_str:
+                query["statusType"] = "for-sale"
+
+        # 4. Budget Filter
         if max_price is not None:
             try:
                 price_val = float(max_price)
-                if price_val > 1000000:
-                    query["price"] = {"$gte": 500000, "$lte": price_val}
-                else:
-                    query["price"] = {"$lte": price_val}
+                query["price"] = {"$lte": price_val}
             except (ValueError, TypeError):
                 pass
 
-        # Search MongoDB
+        # Fetch matching properties
         results = list(properties_collection.find(query).sort("createdAt", -1).limit(5))
 
-        # Safe BSON to JSON Conversion
+        # BSON to JSON Conversion
         cleaned_results = json.loads(json_util.dumps(results))
 
         return JSONResponse(status_code=200, content={"properties": cleaned_results})
@@ -74,8 +86,9 @@ async def search_properties(request: Request):
     except Exception as e:
         return JSONResponse(status_code=200, content={"properties": [], "error": str(e)})
 
+
 # ==========================================
-# ENDPOINT: Caller Leads Save / Update (Upsert)
+# ENDPOINT: Save / Update Leads (Upsert)
 # ==========================================
 @app.post("/save-lead")
 async def save_lead(request: Request):
@@ -89,7 +102,6 @@ async def save_lead(request: Request):
             payload
         )
         
-        # Retell Call Object se auto-caller number fetch karein
         call_obj = payload.get("call", {})
         caller_phone = call_obj.get("from_number") or args.get("phone_number") or args.get("phone")
         caller_name = args.get("name") or "Unknown Customer"
@@ -100,10 +112,9 @@ async def save_lead(request: Request):
                 "phone": caller_phone,
                 "city_interest": args.get("city"),
                 "bhk_interest": args.get("bhk"),
-                "created_at": datetime.now(IST)  # IST Time save hoga
+                "created_at": datetime.now(IST)
             }
             
-            # Upsert logic: Agar phone number pehle se hai, toh naya row banane ke bajaye usi ko update karega
             if caller_phone:
                 leads_collection.update_one(
                     {"phone": caller_phone},
